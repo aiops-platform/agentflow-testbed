@@ -1,0 +1,99 @@
+# Prometheus 配置 —— 测试床资源监控（准实时）
+# 采集模型：pull（每 5s 拉取各 exporter 的 /metrics）
+global:
+  scrape_interval: 5s        # 准实时（测试床规模小，5s 负载可忽略）
+  evaluation_interval: 10s   # 告警规则评估周期
+
+# 告警规则：场景1 的 CPU/磁盘打满 → Alertmanager → AIOps 自动触发
+rule_files:
+- /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # ── 1. cAdvisor：每容器 CPU/内存/磁盘（kubelet 暴露）──
+  - job_name: 'kubernetes-cadvisor'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+    - role: node
+    relabel_configs:
+    - action: labelmap
+      regex: __meta_kubernetes_node_label_(.+)
+    - target_label: __address__
+      replacement: kubernetes.default.svc:443
+    - source_labels: [__meta_kubernetes_node_name]
+      regex: (.+)
+      target_label: __metrics_path__
+      replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+  # ── 1.5 kubelet /metrics：节点 + PVC 磁盘用量（kubelet_volume_stats_*）──
+  - job_name: 'kubernetes-kubelet'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+    - role: node
+    relabel_configs:
+    - target_label: __address__
+      replacement: kubernetes.default.svc:443
+    - source_labels: [__meta_kubernetes_node_name]
+      regex: (.+)
+      target_label: __metrics_path__
+      replacement: /api/v1/nodes/${1}/proxy/metrics
+
+  # ── 2. kube-state-metrics：K8s 对象状态（pod/PVC/restart/limit）──
+  - job_name: 'kube-state-metrics'
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+      action: keep
+      regex: kube-state-metrics
+    - source_labels: [__meta_kubernetes_pod_ip]
+      target_label: __address__
+      replacement: ${1}:8080
+
+  # ── 3. node-exporter：节点级 CPU/磁盘/内存 ──
+  - job_name: 'node-exporter'
+    kubernetes_sd_configs:
+    - role: endpoints
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+      action: keep
+      regex: node-exporter
+
+  # ── 4. 应用资源（核心）：自动发现 pod + 打统一 service 标签 ──
+  #   让 cAdvisor 指标带上 service=order-service，Grafana/告警才能「按服务」过滤
+  - job_name: 'app-resources'
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: "true"                                    # 只有带此注解的 pod 才被抓
+    - source_labels: [__meta_kubernetes_pod_label_app] # pod 的 app=order-service
+      target_label: service
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: pod
+    - source_labels: [__meta_kubernetes_pod_container_name]
+      target_label: container
+
+  # ── 5. Micrometer（Actuator）：JVM 内部指标（GC/堆/线程）──
+  #     Boot 3.3 原生 /actuator/prometheus，无需 jmx-exporter
+  - job_name: 'app-metrics'
+    metrics_path: /actuator/prometheus
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: "true"
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      target_label: service
+    - source_labels: [__meta_kubernetes_pod_ip]
+      target_label: __address__
+      replacement: ${1}:8080

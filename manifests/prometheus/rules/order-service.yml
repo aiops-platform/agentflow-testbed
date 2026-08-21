@@ -1,0 +1,26 @@
+# 告警规则：场景1 资源打满 → 自动触发 AIOps（替代手动投 ticket）
+groups:
+- name: order-service-resources
+  rules:
+  # CPU 利用率 >= 95% 持续 1m → 告警
+  - alert: PodCPUHigh
+    expr: |
+      100 * rate(container_cpu_usage_seconds_total{service="order-service",container!="POD"}[5m])
+        / (container_spec_cpu_quota{container!="POD"} / container_spec_cpu_period{container!="POD"}) >= 95
+    for: 1m
+    labels:
+      severity: critical
+      service: order-service
+    annotations:
+      summary: "{{ $labels.service }} CPU 打满 {{ $value | printf \"%.0f\" }}%"
+
+  # 磁盘（PVC /data）利用率 >= 95% 持续 1m → 告警
+  - alert: PodDiskHigh
+    expr: |
+      100 * kubelet_volume_stats_used_bytes{persistentvolumeclaim="data"}
+        / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="data"} >= 95
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "PVC data 磁盘打满 {{ $value | printf \"%.0f\" }}%"

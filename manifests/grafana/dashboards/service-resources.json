@@ -1,0 +1,120 @@
+{
+  "uid": "service-resources",
+  "title": "服务资源监控（准实时）",
+  "tags": ["aiops", "testbed"],
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "schemaVersion": 38,
+  "version": 4,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "服务",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(jvm_gc_pause_seconds_sum, service)", "refId": "service" },
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "order-service|warranty-service|gateway-service"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "CPU 使用（核）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{pod=~\"$service-.*\"}[2m]) and on(pod) (container_last_seen{pod=~\"$service-.*\"} > time() - 60)",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "gauge",
+      "title": "CPU 利用率 %（order-service，500m limit）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } },
+      "targets": [
+        {
+          "expr": "100 * (rate(container_cpu_usage_seconds_total{pod=~\"order-service-.*\"}[2m]) and on(pod) (container_last_seen{pod=~\"order-service-.*\"} > time() - 60)) / on(pod) (container_spec_cpu_quota{pod=~\"order-service-.*\"} / container_spec_cpu_period{pod=~\"order-service-.*\"})",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "内存使用",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        {
+          "expr": "container_memory_working_set_bytes{pod=~\"$service-.*\"} and on(pod) (container_last_seen{pod=~\"$service-.*\"} > time() - 60)",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "磁盘 /data 用量（order-service）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        {
+          "expr": "data_disk_total_bytes - data_disk_free_bytes",
+          "legendFormat": "used",
+          "refId": "A"
+        },
+        {
+          "expr": "data_disk_total_bytes",
+          "legendFormat": "capacity",
+          "refId": "B"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "id": 6,
+      "type": "gauge",
+      "title": "磁盘利用率 %（order-service /data）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } },
+      "targets": [
+        {
+          "expr": "100 * (data_disk_total_bytes - data_disk_free_bytes) / data_disk_total_bytes",
+          "legendFormat": "data disk",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "GC 暂停（JVM）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(jvm_gc_pause_seconds_sum{service=~\"$service\"}[2m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    }
+  ]
+}

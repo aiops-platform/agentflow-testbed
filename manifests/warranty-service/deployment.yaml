@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warranty-service
+  namespace: order
+  labels:
+    app: warranty-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: warranty-service
+  template:
+    metadata:
+      labels:
+        app: warranty-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      containers:
+      - name: warranty-service
+        image: warranty-service:v1
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: WARRANTY_MISSING_FIN   # 场景2 bug 开关
+          value: "false"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          failureThreshold: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10

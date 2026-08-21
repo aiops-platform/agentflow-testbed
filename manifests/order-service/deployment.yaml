@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: order
+  labels:
+    app: order-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      containers:
+      - name: order-service
+        image: order-service:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: QUOTATION_TEMP_LEAK   # 场景1 bug 开关
+          value: "false"
+        resources:
+          limits:
+            cpu: "500m"               # 小 CPU limit：轻载即 100% throttled（秒级触发）
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          failureThreshold: 30        # 最多 30×10s=5min 启动窗口
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: data
+        emptyDir:
+          medium: Memory        # tmpfs，有真实大小限制
+          sizeLimit: 512Mi

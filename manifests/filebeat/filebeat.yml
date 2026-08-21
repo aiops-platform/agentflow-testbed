@@ -1,0 +1,24 @@
+# Filebeat 配置：只采集 3 个应用容器（order/warranty/gateway）的 stdout 日志 → ES
+filebeat.inputs:
+- type: container
+  paths:
+  - /var/log/containers/*_order_order-service-*.log
+  - /var/log/containers/*_order_warranty-service-*.log
+  - /var/log/containers/*_order_gateway-service-*.log
+  stream: all
+
+# 容器日志是 docker JSON 包装（log/stream/time），内层才是应用的 JSON 日志
+# 解析到 app.* 命名空间，避免与 ECS 字段冲突
+processors:
+- decode_json_fields:
+    fields: ["message"]
+    target: "app"
+    overwrite_keys: true
+    add_error_key: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "app-logs"
+
+setup.template.enabled: false
+setup.ilm.enabled: false
