@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: warranty-service
-        image: warranty-service:v1
+        image: warranty-service:latest
         imagePullPolicy: Never
         ports:
         - containerPort: 8080

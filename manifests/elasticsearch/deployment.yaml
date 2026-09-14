@@ -17,7 +17,8 @@ spec:
     spec:
       containers:
       - name: elasticsearch
-        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+        image: elasticsearch:8.12.2
+        imagePullPolicy: Never
         env:
         - name: discovery.type
           value: single-node

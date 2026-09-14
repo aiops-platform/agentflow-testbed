@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: gateway-service
-        image: gateway-service:v1
+        image: gateway-service:latest
         imagePullPolicy: Never
         ports:
         - containerPort: 8080
