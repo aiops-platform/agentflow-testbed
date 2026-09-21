@@ -5,6 +5,10 @@ metadata:
   namespace: order
   labels:
     app: order-service
+    # Smart Inspection 展示元数据（agentflow 从 K8s API 读，不参与调度/选择器）。
+    # 改动后需 kubectl apply 才生效；label 值是声明配置，不是实测数据。
+    aiops/type: sales
+    aiops/owner: h.a.hu
 spec:
   replicas: 1
   selector:
@@ -29,7 +33,8 @@ spec:
           value: "false"
         resources:
           limits:
-            cpu: "500m"               # 小 CPU limit：轻载即 100% throttled（秒级触发）
+            cpu: "1"                  # 场景1 忙循环会打满任何 limit，1 核照样 100% 触发告警
+            memory: "1Gi"             # 需容纳 tmpfs /data 的 512Mi + 应用自身 ~254MiB；512Mi 会让场景1 写盘变 OOMKill
           requests:
             cpu: "200m"
             memory: "256Mi"

@@ -1,1 +1,4 @@
 services/
+
+.DS_Store
+.idea/

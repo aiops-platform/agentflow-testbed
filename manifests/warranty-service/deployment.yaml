@@ -5,6 +5,9 @@ metadata:
   namespace: order
   labels:
     app: warranty-service
+    # Smart Inspection 展示元数据（agentflow 从 K8s API 读，不参与调度/选择器）
+    aiops/type: aftersales
+    aiops/owner: bo.gong
 spec:
   replicas: 1
   selector:
@@ -28,6 +31,9 @@ spec:
         - name: WARRANTY_MISSING_FIN   # 场景2 bug 开关
           value: "false"
         resources:
+          limits:
+            cpu: "1"
+            memory: "512Mi"           # 给内存百分比一个确定的分母（实测峰值 348MiB）
           requests:
             cpu: "200m"
             memory: "256Mi"

@@ -5,6 +5,10 @@ metadata:
   namespace: order
   labels:
     app: gateway-service
+    # Smart Inspection 展示元数据（agentflow 从 K8s API 读，不参与调度/选择器）。
+    # 页面上的 Squad 列读的就是 aiops/type。gateway 两个业务线共用，故归 common。
+    aiops/type: common
+    aiops/owner: chao.yin
 spec:
   replicas: 1
   selector:
@@ -25,6 +29,9 @@ spec:
         ports:
         - containerPort: 8080
         resources:
+          limits:
+            cpu: "1"
+            memory: "512Mi"           # 给内存百分比一个确定的分母（实测峰值 408MiB）
           requests:
             cpu: "200m"
             memory: "256Mi"
