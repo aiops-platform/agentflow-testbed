@@ -22,6 +22,10 @@ spec:
         imagePullPolicy: Never
         args:
         - --config.file=/etc/prometheus/prometheus.yml
+        # 保留期**显式写出来**：不写也能跑（默认 15d），但默认值随版本变，
+        # 而且"没写"与"写了 15d"在排查时看起来一样。测试床 5s 采样、约 5700 条序列，
+        # 实测增长 ~7MB/小时 ⇒ 15 天约 2.6GB（PVC 给 5Gi）。
+        - --storage.tsdb.retention.time=15d
         ports:
         - containerPort: 9090
         resources:
@@ -30,7 +34,15 @@ spec:
         volumeMounts:
         - name: config
           mountPath: /etc/prometheus
+        # ⚠️ 挂载点就是 TSDB 目录（WORKDIR=/prometheus + 默认 `path: data/`）。
+        # 挂上之后容器里那份旧数据被遮住、PVC 从空开始 —— 这是**刻意的**：
+        # 在此之前数据写在容器可写层，pod 一被重建就全丢（实测 5 天里只剩 4 段）。
+        - name: data
+          mountPath: /prometheus/data
       volumes:
       - name: config
         configMap:
           name: prometheus-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: prometheus-data

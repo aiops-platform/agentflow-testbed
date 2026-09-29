@@ -1,0 +1,25 @@
+# Prometheus 的 TSDB 存储卷。
+#
+# 为什么必须有：在此之前 Prometheus 的 volumes 里**只有 configMap**，TSDB 写在容器的
+# 可写层 —— pod 一被重建（不是重启）历史就全没了。实测 5 天里只有 4 段数据，
+# 于是"和前一日同时段对比"这种基线随时可能查到空。
+#
+# 容量依据：5s 采样、约 5700 条序列，实测 ~7MB/小时 ⇒ 15 天（retention 显式设为 15d）
+# 约 2.6GB，这里给 5Gi 留一倍余量。
+#
+# 用的是 minikube 默认的 `standard`（hostpath-provisioner）StorageClass：
+# 同一台 VM 内，pod 重建后数据还在（这正是本卷要保证的事）。
+# ⚠️ reclaimPolicy 是 Delete —— **删掉这个 PVC 就等于删掉全部指标历史**。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: order
+  labels:
+    app: prometheus
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

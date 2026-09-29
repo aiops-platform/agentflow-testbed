@@ -4,7 +4,10 @@ global:
   scrape_interval: 5s        # 准实时（测试床规模小，5s 负载可忽略）
   evaluation_interval: 10s   # 告警规则评估周期
 
-# 告警规则：场景1 的 CPU/磁盘打满 → Alertmanager → AIOps 自动触发
+# 告警规则：场景1 的 CPU/磁盘打满。
+# ⚠️ 规则**只评估、不外发**：本文件没有 `alerting:` 段，集群里也没有 Alertmanager ⇒
+#    `PodCPUHigh` 不会通知任何人。CPU 的判定改走 APM 的采集链路（判定语写在查询里），
+#    见 multi-agent-workflow/docs/todos/METRIC_PIPELINE_BEST_PRACTICE_zh-CN.md。
 rule_files:
 - /etc/prometheus/rules/*.yml
 
@@ -27,7 +30,7 @@ scrape_configs:
       target_label: __metrics_path__
       replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
 
-  # ── 1.5 kubelet /metrics：节点 + PVC 磁盘用量（kubelet_volume_stats_*）──
+  # ── 1b. kubelet /metrics：节点 + PVC 磁盘用量（kubelet_volume_stats_*）──
   - job_name: 'kubernetes-kubelet'
     scheme: https
     tls_config:
@@ -43,46 +46,19 @@ scrape_configs:
       target_label: __metrics_path__
       replacement: /api/v1/nodes/${1}/proxy/metrics
 
-  # ── 2. kube-state-metrics：K8s 对象状态（pod/PVC/restart/limit）──
-  - job_name: 'kube-state-metrics'
-    kubernetes_sd_configs:
-    - role: pod
-    relabel_configs:
-    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-      action: keep
-      regex: kube-state-metrics
-    - source_labels: [__meta_kubernetes_pod_ip]
-      target_label: __address__
-      replacement: ${1}:8080
+  # ── 2/3/4. kube-state-metrics / node-exporter / app-resources：**已移除**（2026-09-29）──
+  # 这三个 job **从建库起就没生效过**，留在配置里只会让人以为有这路数据（实测过）：
+  #   · kube-state-metrics：集群里没有这个 pod ⇒ 一个 target 都发现不了
+  #     （`count(kube_pod_info)` = 0）
+  #   · node-exporter：集群里没有这个 Service ⇒ 同上（`count(node_cpu_seconds_total)` = 0）
+  #   · app-resources：它按 prometheus.io/scrape 注解抓 pod 的**默认路径 /metrics**，
+  #     而应用暴露的是 /actuator/prometheus ⇒ 三个业务 pod **全部 up=0**（长期失败的 job）。
+  #     同一批数据由下面的 app-metrics 抓（路径正确，同样打 service 标签），删掉不丢东西。
+  # 将来要用 K8s 对象/节点级指标，请**连同 exporter 一起部署**，别只留配置——
+  # node-exporter 能回答「CPU 高是这一个 pod 还是整台机器」，但目前没有任何工具消费它，
+  # 所以这一轮不装（避免"加了东西但消费方为零"）。
 
-  # ── 3. node-exporter：节点级 CPU/磁盘/内存 ──
-  - job_name: 'node-exporter'
-    kubernetes_sd_configs:
-    - role: endpoints
-    relabel_configs:
-    - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
-      action: keep
-      regex: node-exporter
-
-  # ── 4. 应用资源（核心）：自动发现 pod + 打统一 service 标签 ──
-  #   让 cAdvisor 指标带上 service=order-service，Grafana/告警才能「按服务」过滤
-  - job_name: 'app-resources'
-    kubernetes_sd_configs:
-    - role: pod
-    relabel_configs:
-    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-      action: keep
-      regex: "true"                                    # 只有带此注解的 pod 才被抓
-    - source_labels: [__meta_kubernetes_pod_label_app] # pod 的 app=order-service
-      target_label: service
-    - source_labels: [__meta_kubernetes_namespace]
-      target_label: namespace
-    - source_labels: [__meta_kubernetes_pod_name]
-      target_label: pod
-    - source_labels: [__meta_kubernetes_pod_container_name]
-      target_label: container
-
-  # ── 5. Micrometer（Actuator）：JVM 内部指标（GC/堆/线程）──
+  # ── 2. Micrometer（Actuator）：JVM 内部指标（GC/堆/线程）──
   #     Boot 3.3 原生 /actuator/prometheus，无需 jmx-exporter
   - job_name: 'app-metrics'
     metrics_path: /actuator/prometheus
