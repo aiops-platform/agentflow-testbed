@@ -39,6 +39,15 @@ spec:
         # 在此之前数据写在容器可写层，pod 一被重建就全丢（实测 5 天里只剩 4 段）。
         - name: data
           mountPath: /prometheus/data
+        # 告警规则单独挂到 rules/ 子目录：prometheus.yml 里是
+        # rule_files: /etc/prometheus/rules/*.yml，而 ConfigMap 卷会把所有 key
+        # 平铺在挂载点根目录，所以必须用 items 指定 path 才能落在 rules/ 下。
+        # 不这么做的话 Prometheus 不报错，只是静默地一条规则都不加载
+        # （/api/v1/rules 返回空 groups，规则连评估都不做）。
+        # 注：规则本就"只评估、不外发"（本仓库无 alerting: 段、集群无 Alertmanager），
+        # 见 prometheus.yml 顶部说明 —— 加载规则是为了 /api/v1/rules 可查。
+        - name: rules
+          mountPath: /etc/prometheus/rules
       volumes:
       - name: config
         configMap:
@@ -46,3 +55,9 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: prometheus-data
+      - name: rules
+        configMap:
+          name: prometheus-config
+          items:
+          - key: order-service.yml
+            path: order-service.yml

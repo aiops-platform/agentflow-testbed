@@ -20,7 +20,14 @@
 ```bash
 # 0. 前置
 podman machine start                          # 确保 podman 可用
-export DOCKER_HOST=unix:///var/run/docker.sock # docker CLI 指向 podman socket
+# docker CLI 的后端：Docker Desktop 用 /var/run/docker.sock；podman 后端需动态解析
+# （podman 的 socket 在 $TMPDIR/podman/ 下，路径随会话变。仅当本机装了 Docker Desktop
+#   时 /var/run/docker.sock 才存在；否则在 /var/run 下建 socket 需要 root——非管理员账号做不到）
+if [ -S /var/run/docker.sock ]; then
+  export DOCKER_HOST=unix:///var/run/docker.sock
+else
+  export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+fi
 
 # 1. 启动集群
 minikube start --driver=docker --force --cpus=4 --memory=5120
@@ -39,10 +46,14 @@ kubectl apply -f manifests/elasticsearch/ -f manifests/prometheus/ -f manifests/
 kubectl apply -f manifests/filebeat/daemonset.yaml
 
 # 4. 创建 configmaps（数据源配置）
-kubectl -n order create configmap prometheus-config --from-file=prometheus.yml=manifests/prometheus/prometheus.yml
-kubectl -n order create configmap grafana-datasource --from-file=prometheus.yaml=manifests/grafana/provisioning/datasources/prometheus.yaml
-kubectl -n order create configmap grafana-dashboards-provider --from-file=dashboards.yaml=manifests/grafana/provisioning/dashboards/dashboards.yaml
-kubectl -n order create configmap grafana-dashboard-json --from-file=service-resources.json=manifests/grafana/dashboards/service-resources.json
+#    ⚠️ prometheus-config 必须同时含 order-service.yml（告警规则）：
+#    prometheus.yml 里 rule_files 指向 /etc/prometheus/rules/*.yml，deployment 用
+#    items 把它挂进 rules/ 子目录。漏掉的话 Prometheus 不报错，但一条规则都不加载。
+kubectl -n order create configmap prometheus-config \
+  --from-file=prometheus.yml=manifests/prometheus/prometheus.yml \
+  --from-file=order-service.yml=manifests/prometheus/rules/order-service.yml
+#    Grafana 的三个 configmap 已随 manifests/grafana/configmaps.yaml 在第 3 步 apply，
+#    此处无需再 create（重复 create 会 AlreadyExists 报错）。
 kubectl -n order create configmap filebeat-config --from-file=filebeat.yml=manifests/filebeat/filebeat.yml
 
 # 5. 等待就绪
@@ -127,9 +138,44 @@ curl "http://localhost:19090/api/v1/query?query=container_cpu_usage_seconds_tota
 | 服务崩溃 | `kubectl -n order logs <pod> --previous` |
 | 数据源状态 | `kubectl -n order get pods -l app` |
 | Prometheus 抓取 | `curl localhost:19090/api/v1/targets` |
+| 告警规则是否加载 | `curl localhost:19090/api/v1/rules`（`groups` 为空 = 没加载，见下） |
 | 日志是否进 ES | `curl localhost:19200/app-logs/_count` |
+| Pod 间网络 / 集群内 DNS | `./scripts/fix-node-net.sh`（见下） |
 
 完整踩坑记录见 `../SCENARIOS.md` §十（minikube driver、openjdk 下架、Feign 空块、cadvisor pod 级指标、磁盘指标盲区等 13 条）。
+
+### 6.1 节点网络：Pod 间不通 / 集群内 DNS 解析失败
+
+**症状**（很容易误判成业务代码 bug）：
+
+- `curl localhost:18082/quotation` → 500，gateway 日志 `DnsResolveContext ... 10.96.0.10:53 query via UDP timed out after 5000 milliseconds`
+- `curl -X POST localhost:18080/checkout` → 无响应，order-service 日志 `java.net.UnknownHostException: warranty-service`
+- 但 `kubectl -n order exec ... -- curl <podIP>:8080`、节点 → Pod 一切正常
+
+**根因**（实测）：minikube 启动节点时会短暂拉起一次 `dockerd`（实测存活 1.85s，之后 `docker.service` 被 mask 成 inactive）。`dockerd` 启动时执行 `iptables -P FORWARD DROP`，dockerd 停了但 **FORWARD 策略留在节点 netns 里**。而本测试床的 CNI 是 kindnet（`ptp` 插件、`ipMasq:false`），Pod 间流量是**路由**转发、必经 FORWARD 链，kindnet 又不装 Pod 网段的放行规则 → Pod↔Pod 全被丢。节点→Pod 走 OUTPUT/INPUT，所以不受影响，现象才这么误导。
+
+**修复（两层，建议都做）**：
+
+```bash
+# 第一层：永久修复（已验证）—— 让 dockerd 根本不碰 iptables。
+# 节点 runtime 是 containerd，dockerd 只为 minikube docker-env 存在，关掉它的 iptables
+# 管理无副作用。写在节点容器文件系统里，minikube stop/start 后依然有效。
+minikube ssh -- 'echo "{\"iptables\": false}" | sudo tee /etc/docker/daemon.json'
+
+# 第二层：兜底脚本 —— minikube delete 重建节点后 daemon.json 会丢，跑这个恢复。
+./scripts/fix-node-net.sh
+```
+
+> 验证：`minikube ssh -- sudo iptables -S FORWARD | head -1` 不再是 `-P FORWARD DROP`；
+> 或 `kubectl -n order exec deploy/grafana -- nslookup warranty-service.order.svc.cluster.local` 能解析出 ClusterIP。
+
+### 6.2 告警规则静默未加载
+
+`prometheus.yml` 里 `rule_files: - /etc/prometheus/rules/*.yml`，但 ConfigMap 卷会把所有 key **平铺在挂载点根目录**。若 `prometheus-config` 只放 `prometheus.yml`，那个 `rules/` 目录不存在 —— **Prometheus 不报错**，只是 `/api/v1/rules` 返回空 `groups`，规则连评估都不做。
+
+> 注意区分：加载规则 ≠ 有人收到告警。本仓库**没有 `alerting:` 段、集群里也没有 Alertmanager**，所以规则本来就只评估、不外发（见 `prometheus.yml` 顶部说明）。修好挂载是为了 `/api/v1/rules` 可查、规则能参与评估，不是让它发通知。
+
+修复：`prometheus-config` 必须同时含 `order-service.yml`（第 2 步 §四 的 create 命令已含），deployment 用 ConfigMap `items` 把它挂到 `/etc/prometheus/rules/`（见 `manifests/prometheus/deployment.yaml`）。
 
 ## 七、销毁
 

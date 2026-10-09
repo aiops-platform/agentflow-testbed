@@ -11,8 +11,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# docker CLI 走 podman socket
-export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+# docker CLI 走 podman socket。不能用固定路径：/var/run/docker.sock 是 Docker Desktop 的
+# 路径，本机（podman 后端、非管理员账号）不存在也建不了；podman 的 socket 在 $TMPDIR/podman/
+# 下，路径随会话变。沿用调用者已设的 DOCKER_HOST，否则动态解析（与 README 第二节一致）。
+if [[ -z "${DOCKER_HOST:-}" ]]; then
+  if [[ -S /var/run/docker.sock ]]; then
+    export DOCKER_HOST=unix:///var/run/docker.sock
+  else
+    export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+  fi
+fi
 
 SERVICES=(order-service warranty-service gateway-service)
 SKIP_BUILD=false
